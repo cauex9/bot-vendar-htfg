@@ -30,18 +30,15 @@ def get_welcome_text(user_id):
     points = 0.0
     if user:
         balance = user[2]
-        # In case the database was just initialized and points might not be in the tuple yet
-        # though init_db should handle it. If points is the 5th element (index 4):
         points = user[4] if len(user) > 4 else 0.0
     
     points_value = points * 0.5
     
     text = (
-        "💳 Bem vindo à central de vendas e gerenciamento de produtos do https://chat.whatsapp.com/BblYVKMvcs51x930pmTUf6.\n"
-        "Explore o bot pelos botões abaixo. Qualquer dúvida é só chamar @Guiadopelo171c2b.\n\n"
-        "🏛 <b>Carteira:</b>\n"
-        f"┣ ID: <code>{user_id}</code>\n"
-        f"┣ 💰 Saldo: R$ {balance:.2f}\n"
+        "💳 Bem vindo à central de vendas!\n"
+        "Explore o bot pelos botões abaixo. Qualquer dúvida: @Guiadopelo171c2b.\n\n"
+        "🏛 <b>Sua Carteira:</b>\n"
+        f"┣ 💰 Saldo: <b>R$ {balance:.2f}</b>\n"
         f"┗ 💎 Pontos: {points:.2f} (~R${points_value:.2f})"
     )
     return text
@@ -76,13 +73,23 @@ def callback_main_menu(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "shop")
 def callback_shop(call):
-    text = "🛒 <b>Loja</b>\nEscolha uma categoria:"
+    user = db.get_user(call.from_user.id)
+    balance = user[2] if user else 0.0
+    text = f"🛒 <b>Loja</b>\n💰 Seu Saldo: <b>R$ {balance:.2f}</b>\n\nEscolha uma categoria:"
     edit_message(call, text, kb.categories_keyboard())
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("cat_"))
 def callback_category(call):
     category_id = int(call.data.split("_")[1])
-    text = "📦 <b>Produtos</b>\nSelecione o produto desejado:"
+    user = db.get_user(call.from_user.id)
+    balance = user[2] if user else 0.0
+    
+    # Se for a categoria de CC (ID 2) e o usuário não tiver saldo
+    if category_id == 2 and balance <= 0:
+        bot.answer_callback_query(call.id, "❌ Você precisa ter saldo na carteira para acessar as CCs!", show_alert=True)
+        return
+        
+    text = f"📦 <b>Produtos</b>\n💰 Seu Saldo: <b>R$ {balance:.2f}</b>\n\nSelecione o produto desejado:"
     edit_message(call, text, kb.products_keyboard(category_id))
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("prod_"))
@@ -95,13 +102,16 @@ def callback_product(call):
         return
         
     _, _, name, description, price, stock = product
+    user = db.get_user(call.from_user.id)
+    balance = user[2] if user else 0.0
     
     text = (
         f"📦 <b>Produto:</b> {name}\n\n"
         f"📝 <b>Descrição:</b>\n{description}\n\n"
-        f"💵 <b>Preço:</b> R$ {price:.2f}"
+        f"💵 <b>Preço:</b> R$ {price:.2f}\n"
+        f"💰 <b>Seu Saldo:</b> R$ {balance:.2f}"
     )
-    edit_message(call, text, kb.product_detail_keyboard(product_id))
+    edit_message(call, text, kb.product_detail_keyboard(product_id, call.from_user.id))
 
 @bot.callback_query_handler(func=lambda call: call.data == "profile")
 def callback_profile(call):
@@ -159,12 +169,16 @@ def process_add_balance_amount(message):
         identifier = f"dep_{user_id}_{str(uuid.uuid4())[:6]}"
         bot.send_message(message.chat.id, "⏳ Gerando seu Pix para depósito... Aguarde.")
         
+        user = db.get_user(user_id)
+        current_balance = user[2] if user else 0.0
+        
         pix_data = pay.generate_pix(amount, client_data, identifier)
         
         if pix_data:
             text = (
                 f"✅ <b>Pix de Depósito Gerado!</b>\n\n"
-                f"💵 <b>Valor:</b> R$ {amount:.2f}\n\n"
+                f"💵 <b>Valor a Adicionar:</b> R$ {amount:.2f}\n"
+                f"💰 <b>Saldo Atual:</b> R$ {current_balance:.2f}\n\n"
                 f"📱 <b>Copia e Cola:</b>\n<code>{pix_data['pix_code']}</code>\n\n"
                 f"💡 <i>Seu saldo será creditado assim que o pagamento for confirmado.</i>"
             )
@@ -175,6 +189,27 @@ def process_add_balance_amount(message):
             
     except ValueError:
         bot.send_message(message.chat.id, "❌ Valor inválido. Digite apenas números.")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("paybal_"))
+def callback_pay_balance(call):
+    product_id = int(call.data.split("_")[1])
+    bot.answer_callback_query(call.id, "Processando pagamento...")
+    
+    success, result = db.buy_with_balance(call.from_user.id, product_id)
+    
+    if success:
+        user = db.get_user(call.from_user.id)
+        new_balance = user[2] if user else 0.0
+        text = (
+            "🎉 <b>Pagamento com Saldo Confirmado!</b>\n\n"
+            "Aqui está o seu produto:\n"
+            f"<code>{result}</code>\n\n"
+            f"💰 <b>Saldo Restante:</b> R$ {new_balance:.2f}\n\n"
+            "Obrigado pela compra! 💎"
+        )
+        edit_message(call, text, kb.main_menu_keyboard())
+    else:
+        bot.answer_callback_query(call.id, f"❌ {result}", show_alert=True)
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "history")
@@ -231,6 +266,13 @@ def callback_buy(call):
     identifier = f"buy_{user_id}_{str(uuid.uuid4())[:6]}"
     
     bot.answer_callback_query(call.id, "Gerando Pix...")
+    
+    user = db.get_user(user_id)
+    balance = user[2] if user else 0.0
+    
+    # Logic for paying with balance could be added here if requested, 
+    # but for now we just show the balance on the Pix screen as requested.
+    
     bot.send_message(call.message.chat.id, "⏳ Gerando seu Pix... Aguarde um momento.")
     
     pix_data = pay.generate_pix(amount, client_data, identifier)
@@ -239,7 +281,8 @@ def callback_buy(call):
         text = (
             f"✅ <b>Pix Gerado com Sucesso!</b>\n\n"
             f"📦 <b>Produto:</b> {product_name}\n"
-            f"💵 <b>Valor:</b> R$ {amount:.2f}\n\n"
+            f"💵 <b>Valor:</b> R$ {amount:.2f}\n"
+            f"💰 <b>Seu Saldo:</b> R$ {balance:.2f}\n\n"
             f"📱 <b>Copia e Cola:</b>\n<code>{pix_data['pix_code']}</code>\n\n"
             f"💡 <i>Após o pagamento, clique no botão abaixo para receber seu produto.</i>"
         )
@@ -255,15 +298,19 @@ def callback_buy(call):
 @bot.callback_query_handler(func=lambda call: call.data.startswith("check_"))
 def callback_check_payment(call):
     # Format: check_transactionId_productId
+    # Usando rsplit para pegar o productId do final, caso o transactionId tenha "_"
     parts = call.data.split("_")
-    transaction_id = parts[1]
-    product_id = int(parts[2])
+    product_id = int(parts[-1])
+    transaction_id = "_".join(parts[1:-1])
     
     bot.answer_callback_query(call.id, "Verificando pagamento...")
     
     status_data = pay.check_status(transaction_id)
+    logging.info(f"Status check for {transaction_id}: {status_data}")
     
-    if status_data and status_data.get('status') == 'OK':
+    status = str(status_data.get('status', '')).upper() if status_data else 'PENDING'
+    
+    if status in ['OK', 'PAID', 'SUCCESS']:
         item = db.deliver_product(call.from_user.id, product_id)
         if item:
             user = db.get_user(call.from_user.id)
@@ -279,34 +326,35 @@ def callback_check_payment(call):
         else:
             bot.answer_callback_query(call.id, "Erro na entrega ou estoque vazio. Contate o suporte!", show_alert=True)
     else:
-        current_status = status_data.get('status', 'PENDING') if status_data else 'PENDING'
-        bot.answer_callback_query(call.id, f"Pagamento ainda não detectado. Status: {current_status}", show_alert=True)
+        bot.answer_callback_query(call.id, f"Pagamento ainda não detectado. Status: {status}", show_alert=True)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("checkdep_"))
 def callback_check_deposit(call):
     # Format: checkdep_transactionId_amount
     parts = call.data.split("_")
-    transaction_id = parts[1]
-    amount = float(parts[2])
+    amount = float(parts[-1])
+    transaction_id = "_".join(parts[1:-1])
     
     bot.answer_callback_query(call.id, "Verificando depósito...")
     
     status_data = pay.check_status(transaction_id)
+    logging.info(f"Deposit check for {transaction_id}: {status_data}")
     
-    if status_data and status_data.get('status') == 'OK':
+    status = str(status_data.get('status', '')).upper() if status_data else 'PENDING'
+    
+    if status in ['OK', 'PAID', 'SUCCESS']:
         db.add_balance(call.from_user.id, amount)
+        # Forçamos uma nova busca para garantir o saldo atualizado
         user = db.get_user(call.from_user.id)
         new_balance = user[2] if user else amount
         text = (
-            "🎉 <b>Depósito Confirmado!</b>\n\n"
-            f"✅ R$ {amount:.2f} foram adicionados.\n"
-            f"💰 <b>Seu Novo Saldo:</b> R$ {new_balance:.2f}\n\n"
-            "Aproveite as compras! 💎"
+            "✅ <b>Depósito recebido</b>\n\n"
+            f"<b>Saldo adicionado:</b> R$ {amount:.2f}\n"
+            f"<b>Saldo atual:</b> R$ {new_balance:.2f}"
         )
         edit_message(call, text, kb.main_menu_keyboard())
     else:
-        current_status = status_data.get('status', 'PENDING') if status_data else 'PENDING'
-        bot.answer_callback_query(call.id, f"Depósito não detectado. Status: {current_status}", show_alert=True)
+        bot.answer_callback_query(call.id, f"Depósito não detectado. Status: {status}", show_alert=True)
 
 # --- ADMIN PANEL ---
 
@@ -381,6 +429,40 @@ def process_add_stock(message, prod_id):
     
     db.add_stock(prod_id, items)
     bot.send_message(message.chat.id, f"✅ {len(items)} itens adicionados ao estoque!", reply_markup=kb.admin_keyboard())
+
+# --- BROADCAST COMMAND ---
+
+@bot.message_handler(commands=['avisar', 'broadcast'])
+def command_broadcast(message):
+    if message.from_user.id != 6835516470:
+        return
+    
+    msg = bot.send_message(message.chat.id, "📝 <b>Broadcast</b>\n\nEnvie a mensagem que você deseja transmitir para TODOS os usuários (pode conter texto, emojis e formatação HTML):")
+    bot.register_next_step_handler(msg, process_broadcast)
+
+def process_broadcast(message):
+    if message.from_user.id != 6835516470:
+        return
+    
+    broadcast_text = message.text
+    if not broadcast_text:
+        bot.send_message(message.chat.id, "❌ Mensagem vazia. Operação cancelada.")
+        return
+    
+    users = db.get_all_users()
+    bot.send_message(message.chat.id, f"🚀 Iniciando transmissão para {len(users)} usuários...")
+    
+    success = 0
+    failed = 0
+    
+    for user_id in users:
+        try:
+            bot.send_message(user_id, broadcast_text)
+            success += 1
+        except Exception:
+            failed += 1
+            
+    bot.send_message(message.chat.id, f"✅ <b>Transmissão Concluída!</b>\n\n🟢 Sucesso: {success}\n🔴 Falha: {failed}")
 
 if __name__ == "__main__":
     db.init_db()

@@ -91,6 +91,14 @@ def get_user(user_id: int):
     conn.close()
     return user
 
+def get_all_users():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT user_id FROM users')
+    users = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return users
+
 def get_categories():
     conn = get_connection()
     cursor = conn.cursor()
@@ -203,6 +211,49 @@ def deliver_product(user_id: int, product_id: int):
     
     conn.close()
     return None
+
+def buy_with_balance(user_id: int, product_id: int):
+    """
+    Attempts to buy a product using the user's wallet balance.
+    Returns (success: bool, result: str)
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Get user balance
+    cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,))
+    res = cursor.fetchone()
+    if not res:
+        conn.close()
+        return False, "Usuário não encontrado."
+    
+    balance = res[0]
+    
+    # Get product price
+    cursor.execute('SELECT price FROM products WHERE id = ?', (product_id,))
+    res = cursor.fetchone()
+    if not res:
+        conn.close()
+        return False, "Produto não encontrado."
+    
+    price = res[0]
+    
+    if balance < price:
+        conn.close()
+        return False, "Saldo insuficiente."
+    
+    # Subtract balance
+    cursor.execute('UPDATE users SET balance = balance - ? WHERE user_id = ?', (price, user_id))
+    conn.commit()
+    conn.close()
+    
+    item = deliver_product(user_id, product_id)
+    if item:
+        return True, item
+    else:
+        # Refund balance if delivery failed (e.g. out of stock)
+        add_balance(user_id, price)
+        return False, "Estoque vazio no momento."
 
 def add_stock(product_id: int, new_items: list):
     conn = get_connection()

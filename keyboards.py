@@ -29,10 +29,20 @@ def products_keyboard(category_id: int):
     markup.add(InlineKeyboardButton("🔙 Voltar", callback_data="shop"))
     return markup
 
-def product_detail_keyboard(product_id: int):
+def product_detail_keyboard(product_id: int, user_id: int):
     markup = InlineKeyboardMarkup(row_width=1)
+    
+    product = db.get_product(product_id)
+    user = db.get_user(user_id)
+    
+    if product and user:
+        price = product[4]
+        balance = user[2]
+        if balance >= price:
+            markup.add(InlineKeyboardButton(f"💰 Pagar com Saldo (R$ {price:.2f})", callback_data=f"paybal_{product_id}"))
+    
     markup.add(
-        InlineKeyboardButton("✅ Comprar", callback_data=f"buy_{product_id}"),
+        InlineKeyboardButton("⚡ Gerar Pix (Copia e Cola)", callback_data=f"buy_{product_id}"),
         InlineKeyboardButton("🔙 Voltar", callback_data="shop")
     )
     return markup
