@@ -266,14 +266,16 @@ def callback_check_payment(call):
     if status_data and status_data.get('status') == 'OK':
         item = db.deliver_product(call.from_user.id, product_id)
         if item:
+            user = db.get_user(call.from_user.id)
+            new_balance = user[2] if user else 0.0
             text = (
                 "🎉 <b>Pagamento Confirmado!</b>\n\n"
                 "Aqui está o seu produto:\n"
                 f"<code>{item}</code>\n\n"
+                f"💰 <b>Saldo Atual:</b> R$ {new_balance:.2f}\n\n"
                 "Obrigado pela compra! 💎"
             )
-            bot.edit_message_caption(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                                     caption=text, reply_markup=kb.main_menu_keyboard())
+            edit_message(call, text, kb.main_menu_keyboard())
         else:
             bot.answer_callback_query(call.id, "Erro na entrega ou estoque vazio. Contate o suporte!", show_alert=True)
     else:
@@ -293,9 +295,12 @@ def callback_check_deposit(call):
     
     if status_data and status_data.get('status') == 'OK':
         db.add_balance(call.from_user.id, amount)
+        user = db.get_user(call.from_user.id)
+        new_balance = user[2] if user else amount
         text = (
             "🎉 <b>Depósito Confirmado!</b>\n\n"
-            f"💰 R$ {amount:.2f} foram adicionados ao seu saldo.\n\n"
+            f"✅ R$ {amount:.2f} foram adicionados.\n"
+            f"💰 <b>Seu Novo Saldo:</b> R$ {new_balance:.2f}\n\n"
             "Aproveite as compras! 💎"
         )
         edit_message(call, text, kb.main_menu_keyboard())
@@ -310,6 +315,24 @@ def command_adm(message):
     if message.from_user.id not in config.ADMIN_IDS:
         return
     bot.send_message(message.chat.id, "🛠 <b>Painel Administrativo</b>\nEscolha uma opção:", reply_markup=kb.admin_keyboard())
+
+@bot.message_handler(commands=['saldo'])
+def command_set_balance(message):
+    if message.from_user.id not in config.ADMIN_IDS: return
+    try:
+        # Format: /saldo user_id amount
+        args = message.text.split()
+        if len(args) < 3:
+            bot.reply_to(message, "❌ Use: /saldo [ID] [VALOR]")
+            return
+        
+        target_id = int(args[1])
+        amount = float(args[2])
+        
+        db.add_balance(target_id, amount)
+        bot.reply_to(message, f"✅ Adicionado R$ {amount:.2f} ao saldo do usuário <code>{target_id}</code>.")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Erro: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data == "adm_panel")
 def callback_adm_panel(call):
